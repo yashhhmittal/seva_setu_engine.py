@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""
+Seva Setu / Disha-Setu Core Engine
+----------------------------------
+An offline-first, bilingual (English/Hindi) career guidance platform backend.
+Designed to assess student aptitudes in low-connectivity environments, match 
+them with viable career pathways, and generate offline-ready printed kits.
+
+Version: 1.0.0
+Architecture: SQLite Local Database + Interactive CLI
+"""
+
+import sqlite3
+import json
+import os
+import sys
+from datetime import datetime
+from typing import List, Dict, Optional
+
+# --- ANSI Color Codes for Attractive Terminal UI ---
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+# --- Database Initialization & Schema ---
+DB_NAME = "seva_setu_offline.db"
+
+def init_db():
+    """Initializes the offline SQLite database for classroom deployments."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    # Students Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            age INTEGER,
+            current_grade TEXT,
+            primary_language TEXT DEFAULT 'Hindi',
+            registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Career Pathways Table (Bilingual)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS career_paths (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title_en TEXT NOT NULL,
+            title_hi TEXT NOT NULL,
+            category TEXT NOT NULL,
+            description_en TEXT,
+            description_hi TEXT,
+            required_aptitude TEXT
+        )
+    ''')
+
+    # Assessments Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS assessments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            analytical_score INTEGER,
+            creative_score INTEGER,
+            communication_score INTEGER,
+            technical_score INTEGER,
+            FOREIGN KEY (student_id) REFERENCES students(id)
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+
+# --- Core Platform Engine ---
+class SevaSetuPlatform:
+    def __init__(self):
+        self.conn = sqlite3.connect(DB_NAME)
+        self.conn.row_factory = sqlite3.Row
+        self.cursor = self.conn.cursor()
+
+    def register_student(self, name: str, age: int, grade: str, lang: str = "Hindi") -> int:
+        """Registers a student into the offline system."""
+        self.cursor.execute(
+            "INSERT INTO students (full_name, age, current_grade, primary_language) VALUES (?, ?, ?, ?)",
+            (name, age, grade, lang)
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def add_career_pathway(self, title_en: str, title_hi: str, category: str, desc_en: str, desc_hi: str, req_apt: str):
+        """Adds a bilingual career pathway to the repository."""
+        self.cursor.execute(
+            """INSERT INTO career_paths 
+               (title_en, title_hi, category, description_en, description_hi, required_aptitude) 
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (title_en, title_hi, category, desc_en, desc_hi, req_apt)
+        )
+        self.conn.commit()
+
+    def record_assessment(self, student_id: int, scores: Dict[str, int]):
+        """Saves a student's aptitude scores from the offline printed test."""
+        self.cursor.execute(
+            """INSERT INTO assessments 
+               (student_id, analytical_score, creative_score, communication_score, technical_score) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (student_id, scores['analytical'], scores['creative'], scores['communication'], scores['technical'])
+        )
+        self.conn.commit()
+
+    def get_student_profile(self, student_id: int) -> Optional[sqlite3.Row]:
+        self.cursor.execute("SELECT * FROM students WHERE id = ?", (student_id,))
+        return self.cursor.fetchone()
+
+    def get_assessment(self, student_id: int) -> Optional[sqlite3.Row]:
+        self.cursor.execute("SELECT * FROM assessments WHERE student_id = ? ORDER BY id DESC LIMIT 1", (student_id,))
+        return self.cursor.fetchone()
+
+    def generate_career_match(self, student_id: int) -> List[sqlite3.Row]:
+        """Matches a student to a career based on their highest aptitude score."""
+        assessment = self.get_assessment(student_id)
+        if not assessment:
+            return []
+
+        scores = {
+            'Analytical': assessment['analytical_score'],
+            'Creative': assessment['creative_score'],
+            'Communication': assessment['communication_score'],
+            'Technical': assessment['technical_score']
+        }
+        
+        # Find the dominant aptitude
+        dominant_trait = max(scores, key=scores.get)
+        
+        self.cursor.execute("SELECT * FROM career_paths WHERE required_aptitude = ?", (dominant_trait,))
+        return self.cursor.fetchall()
+
+    def print_bilingual_kit(self, student_id: int):
+        """Generates a text-based layout for the physical printed classroom kit."""
+        student = self.get_student_profile(student_id)
+        matches = self.generate_career_match(student_id)
+
+        if not student:
+            print(f"{Colors.FAIL}Error: Student not found.{Colors.ENDC}")
+            return
+
+        print(f"\n{Colors.HEADER}======================================================{Colors.ENDC}")
+        print(f"{Colors.BOLD}   DISHA-SETU / SEVA SETU - STUDENT CAREER REPORT   {Colors.ENDC}")
+        print(f"{Colors.HEADER}======================================================{Colors.ENDC}")
+        print(f"Student Name / छात्र का नाम: {student['full_name']}")
+        print(f"Grade / कक्षा: {student['current_grade']}")
+        print(f"Date / दिनांक: {datetime.now().strftime('%Y-%m-%d')}")
+        print(f"{Colors.HEADER}------------------------------------------------------{Colors.ENDC}")
+        
+        if not matches:
+            print(f"{Colors.WARNING}No assessment data found. Please run assessment first.{Colors.ENDC}")
+            print(f"{Colors.WARNING}कोई मूल्यांकन डेटा नहीं मिला। कृपया पहले मूल्यांकन करें।{Colors.ENDC}")
+            return
+
+        print(f"{Colors.GREEN}Recommended Pathways | अनुशंसित मार्ग:{Colors.ENDC}\n")
+        
+        for idx, match in enumerate(matches, 1):
+            print(f"{Colors.CYAN}{idx}. {match['title_en']} / {match['title_hi']}{Colors.ENDC}")
+            print(f"   Category: {match['category']}")
+            print(f"   About: {match['description_en']}")
+            print(f"   विवरण: {match['description_hi']}\n")
+        
+        print(f"{Colors.HEADER}======================================================{Colors.ENDC}\n")
+
+
+# --- Data Seeding Module ---
+def seed_initial_data(platform: SevaSetuPlatform):
+    """Populates the database with foundational career data if empty."""
+    platform.cursor.execute("SELECT COUNT(*) FROM career_paths")
+    if platform.cursor.fetchone()[0] == 0:
+        print(f"{Colors.BLUE}Seeding offline database with bilingual career data...{Colors.ENDC}")
+        
+        pathways = [
+            {
+                "en": "Software Development", "hi": "सॉफ्टवेयर विकास", "cat": "STEM", 
+                "desc_en": "Building applications and writing code for computers.",
+                "desc_hi": "कंप्यूटर के लिए एप्लिकेशन बनाना और कोड लिखना।",
+                "apt": "Technical"
+            },
+            {
+                "en": "Data Analysis", "hi": "डेटा विश्लेषण", "cat": "STEM", 
+                "desc_en": "Interpreting data to help businesses make decisions.",
+                "desc_hi": "व्यवसायों को निर्णय लेने में मदद करने के लिए डेटा की व्याख्या करना।",
+                "apt": "Analytical"
+            },
+            {
+                "en": "Graphic Design", "hi": "ग्राफिक डिजाइन", "cat": "Arts", 
+                "desc_en": "Creating visual content to communicate messages.",
+                "desc_hi": "संदेश संप्रेषित करने के लिए दृश्य सामग्री बनाना।",
+                "apt": "Creative"
+            },
+            {
+                "en": "Public Relations", "hi": "जनसंपर्क", "cat": "Humanities", 
+                "desc_en": "Managing the spread of information between an organization and the public.",
+                "desc_hi": "किसी संगठन और जनता के बीच सूचना के प्रसार का प्रबंधन करना।",
+                "apt": "Communication"
+            },
+            {
+                "en": "Financial Accounting", "hi": "वित्तीय लेखांकन", "cat": "Commerce", 
+                "desc_en": "Keeping and interpreting financial records.",
+                "desc_hi": "वित्तीय रिकॉर्ड रखना और उनकी व्याख्या करना।",
+                "apt": "Analytical"
+            }
+        ]
+        
+        for p in pathways:
+            platform.add_career_pathway(p['en'], p['hi'], p['cat'], p['desc_en'], p['desc_hi'], p['apt'])
+        print(f"{Colors.GREEN}Data seeding complete!{Colors.ENDC}")
+
+# --- Command Line Interface ---
+def clear_screen():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+def print_menu():
+    print(f"\n{Colors.BOLD}{Colors.CYAN}--- SEVA SETU OFFLINE SYSTEM ---{Colors.ENDC}")
+    print("1. Register New Student")
+    print("2. Input Classroom Assessment Scores")
+    print("3. Generate Bilingual Printed Kit")
+    print("4. View All Registered Students")
+    print("5. Exit")
+    print(f"{Colors.CYAN}--------------------------------{Colors.ENDC}")
+
+def main():
+    init_db()
+    platform = SevaSetuPlatform()
+    seed_initial_data(platform)
+    
+    clear_screen()
+    print(f"{Colors.BOLD}{Colors.GREEN}System Initialized. Ready for offline classroom deployment.{Colors.ENDC}")
+
+    while True:
+        print_menu()
+        choice = input(f"{Colors.BOLD}Select an option (1-5): {Colors.ENDC}")
+
+        if choice == '1':
+            print(f"\n{Colors.UNDERLINE}Student Registration{Colors.ENDC}")
+            name = input("Full Name: ")
+            age = int(input("Age: "))
+            grade = input("Grade/Class: ")
+            lang = input("Primary Language (English/Hindi) [Default: Hindi]: ") or "Hindi"
+            
+            s_id = platform.register_student(name, age, grade, lang)
+            print(f"{Colors.GREEN}Success! Student registered with ID: {s_id}{Colors.ENDC}")
+
+        elif choice == '2':
+            print(f"\n{Colors.UNDERLINE}Record Assessment Scores (1-10){Colors.ENDC}")
+            s_id = int(input("Student ID: "))
+            
+            # Verify student exists
+            if not platform.get_student_profile(s_id):
+                print(f"{Colors.FAIL}Error: No student found with ID {s_id}.{Colors.ENDC}")
+                continue
+
+            try:
+                scores = {
+                    'analytical': int(input("Analytical Score: ")),
+                    'creative': int(input("Creative Score: ")),
+                    'communication': int(input("Communication Score: ")),
+                    'technical': int(input("Technical Score: "))
+                }
+                platform.record_assessment(s_id, scores)
+                print(f"{Colors.GREEN}Scores saved successfully!{Colors.ENDC}")
+            except ValueError:
+                print(f"{Colors.FAIL}Error: Please enter valid numbers.{Colors.ENDC}")
+
+        elif choice == '3':
+            print(f"\n{Colors.UNDERLINE}Generate Classroom Kit{Colors.ENDC}")
+            try:
+                s_id = int(input("Enter Student ID to generate report: "))
+                platform.print_bilingual_kit(s_id)
+            except ValueError:
+                print(f"{Colors.FAIL}Error: Invalid ID.{Colors.ENDC}")
+
+        elif choice == '4':
+            print(f"\n{Colors.UNDERLINE}Registered Students{Colors.ENDC}")
+            platform.cursor.execute("SELECT id, full_name, current_grade FROM students")
+            students = platform.cursor.fetchall()
+            if not students:
+                print("No students registered yet.")
+            else:
+                for s in students:
+                    print(f"ID: {s['id']} | Name: {s['full_name']} | Grade: {s['current_grade']}")
+
+        elif choice == '5':
+            print(f"\n{Colors.BLUE}Shutting down offline engine. Goodbye!{Colors.ENDC}")
+            sys.exit(0)
+            
+        else:
+            print(f"{Colors.FAIL}Invalid option. Please try again.{Colors.ENDC}")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"\n{Colors.WARNING}Process interrupted by user. Exiting safely...{Colors.ENDC}")
+        sys.exit(0)
